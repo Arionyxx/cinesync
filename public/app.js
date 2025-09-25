@@ -83,7 +83,8 @@ els.tabs.forEach(btn => {
 });
 
 // --- Socket ---
-const socket = io();
+// Use /api/socket path for Vercel deployment
+const socket = io({ path: '/api/socket' });
 let me = { id: null, name: null, roomId: null, isHost: false };
 let current = { source: null, playback: null };
 
@@ -435,7 +436,8 @@ els.btnSetSource.addEventListener('click', async () => {
 });
 
 els.btnUpload.addEventListener('click', () => {
-  els.fileInput.click();
+  toast('File uploads are not supported in this deployment. Use YouTube videos instead.');
+  // els.fileInput.click(); // Disabled for Vercel
 });
 els.fileInput.addEventListener('change', async () => {
   if (!me.isHost) { toast('Only the host can upload'); return; }

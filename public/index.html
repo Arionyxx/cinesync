@@ -48,16 +48,16 @@
         <div class="placeholder">
           <div class="ph-icon">🎬</div>
           <div class="ph-title">Start a watch party</div>
-          <div class="ph-sub">Paste a YouTube URL or upload a video (host only)</div>
+          <div class="ph-sub">Paste a YouTube URL to get started (host only)</div>
         </div>
       </div>
 
       <div class="controls">
         <div class="row">
-          <input id="sourceUrl" class="input flex" placeholder="YouTube link or direct .mp4/.webm URL" />
+          <input id="sourceUrl" class="input flex" placeholder="YouTube link (e.g., https://youtube.com/watch?v=...)" />
           <input id="fileInput" type="file" accept="video/*" hidden />
-          <button id="btnUpload" class="btn">Upload video</button>
-          <button id="btnSetSource" class="btn primary">Set source (host)</button>
+          <button id="btnUpload" class="btn" style="display: none;">Upload video</button>
+          <button id="btnSetSource" class="btn primary">Set YouTube source (host)</button>
         </div>
         <div class="row">
           <button id="btnPlay" class="btn">Play</button>
