@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CineSync — Watch Party Starter</title>
+  <meta name="description" content="A minimal watch-party starter for YouTube and uploaded videos." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 256 256%22><rect width=%22256%22 height=%22256%22 rx=%2232%22 fill=%22%23000%22/><path fill=%22%23fff%22 d=%22M105 80l66 48l-66 48z%22/></svg>">
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- YouTube IFrame API -->
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script>
+    // Flag when YT API is ready
+    window._ytReady = false;
+    window.onYouTubeIframeAPIReady = function(){ window._ytReady = true; };
+  </script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="bg"></div>
+  <header class="topbar glass">
+    <div class="brand">
+      <div class="logo">▶</div>
+      <div class="name">CineSync</div>
+    </div>
+    <div class="room-controls">
+      <input id="displayName" class="input" placeholder="Your name" />
+      <input id="roomCode" class="input" placeholder="Room code (e.g. ABC123)" maxlength="8" />
+      <button id="btnJoin" class="btn primary">Join / Create</button>
+      <span id="hostBadge" class="host-badge" hidden>Host</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="left glass">
+      <div class="panel-header">
+        <div>
+          <div class="room-id">Room: <span id="currentRoom">—</span></div>
+          <div class="source-type" id="sourceType">Source: —</div>
+        </div>
+        <div class="share">
+          <button id="btnCopyLink" class="btn">Copy invite link</button>
+        </div>
+      </div>
+
+      <div id="playerMount" class="player-mount">
+        <div class="placeholder">
+          <div class="ph-icon">🎬</div>
+          <div class="ph-title">Start a watch party</div>
+          <div class="ph-sub">Paste a YouTube URL or upload a video (host only)</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="row">
+          <input id="sourceUrl" class="input flex" placeholder="YouTube link or direct .mp4/.webm URL" />
+          <input id="fileInput" type="file" accept="video/*" hidden />
+          <button id="btnUpload" class="btn">Upload video</button>
+          <button id="btnSetSource" class="btn primary">Set source (host)</button>
+        </div>
+        <div class="row">
+          <button id="btnPlay" class="btn">Play</button>
+          <button id="btnPause" class="btn">Pause</button>
+          <input id="seek" type="range" min="0" max="1000" value="0" class="slider flex" />
+          <label class="time" id="timeLabel">00:00 / 00:00</label>
+          <select id="rate" class="select">
+            <option value="0.5">0.5×</option>
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="1.75">1.75×</option>
+            <option value="2">2×</option>
+          </select>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="1" class="slider vol" />
+        </div>
+      </div>
+      <div class="tip">
+        ⚠️ YouTube must play via the official IFrame Player API. Do not block or alter ads, and follow YouTube Terms of Service.
+      </div>
+    </section>
+
+    <aside class="right glass">
+      <div class="tabs">
+        <button class="tab active" data-tab="chat">Chat</button>
+        <button class="tab" data-tab="people">People</button>
+      </div>
+      <div class="tabpanes">
+        <div class="pane active" id="paneChat">
+          <div id="chatLog" class="chatlog"></div>
+          <div class="chatform">
+            <input id="chatInput" class="input" placeholder="Type a message…" />
+            <button id="btnSend" class="btn primary">Send</button>
+          </div>
+        </div>
+        <div class="pane" id="panePeople">
+          <ul id="peopleList" class="people"></ul>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="foot glass">
+    <div>Made for you to hack on ✨ — this is a starter, not production-ready. Consider adding auth, HLS transcoding, persistence, and moderation before going big.</div>
+  </footer>
+</body>
+</html>
