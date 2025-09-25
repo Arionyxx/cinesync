@@ -1,25 +1,12 @@
 /* Vercel-compatible Socket.IO handler
- * Uses external Redis/database for room state persistence
- * Falls back to YouTube-only mode if file uploads aren't available
+ * Simplified version that works reliably on serverless
+ * Uses in-memory storage for room state (good for small scale)
  */
 
 const { Server } = require('socket.io');
-const { createAdapter } = require('@socket.io/redis-adapter');
-const { createClient } = require('redis');
 
-// In-memory fallback for development/demo
+// Simple in-memory storage for rooms
 let rooms = new Map();
-let redisClient = null;
-
-// Initialize Redis if URL is provided
-if (process.env.REDIS_URL) {
-  try {
-    redisClient = createClient({ url: process.env.REDIS_URL });
-    redisClient.on('error', (err) => console.log('Redis Client Error', err));
-  } catch (error) {
-    console.warn('Redis connection failed, using memory store:', error.message);
-  }
-}
 
 function makeRoomId() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -28,36 +15,16 @@ function makeRoomId() {
   return id;
 }
 
-async function getRoom(roomId) {
-  if (redisClient && redisClient.isOpen) {
-    try {
-      const data = await redisClient.get(`room:${roomId}`);
-      return data ? JSON.parse(data) : null;
-    } catch (error) {
-      console.warn('Redis get failed, falling back to memory:', error.message);
-    }
-  }
+function getRoom(roomId) {
   return rooms.get(roomId) || null;
 }
 
-async function setRoom(room) {
-  if (redisClient && redisClient.isOpen) {
-    try {
-      await redisClient.setEx(`room:${room.id}`, 3600, JSON.stringify({
-        ...room,
-        participants: Array.from(room.participants.entries())
-      }));
-    } catch (error) {
-      console.warn('Redis set failed, falling back to memory:', error.message);
-      rooms.set(room.id, room);
-    }
-  } else {
-    rooms.set(room.id, room);
-  }
+function setRoom(room) {
+  rooms.set(room.id, room);
 }
 
-async function getOrCreateRoom(roomId) {
-  let room = await getRoom(roomId);
+function getOrCreateRoom(roomId) {
+  let room = getRoom(roomId);
   if (!room) {
     room = {
       id: roomId || makeRoomId(),
@@ -66,10 +33,7 @@ async function getOrCreateRoom(roomId) {
       source: null,
       playback: { status: 'paused', at: 0, rate: 1, ts: Date.now() }
     };
-    await setRoom(room);
-  } else if (room.participants && Array.isArray(room.participants)) {
-    // Convert back from Redis array format
-    room.participants = new Map(room.participants);
+    setRoom(room);
   }
   return room;
 }
@@ -102,27 +66,16 @@ export default function handler(req, res) {
     io = new Server(res.socket.server, {
       path: '/api/socket',
       addTrailingSlash: false,
-      cors: { origin: '*' }
+      cors: { origin: '*' },
+      transports: ['polling', 'websocket']
     });
 
-    // Set up Redis adapter if available
-    if (redisClient) {
-      redisClient.connect().then(() => {
-        const pubClient = redisClient.duplicate();
-        const subClient = redisClient.duplicate();
-        io.adapter(createAdapter(pubClient, subClient));
-        console.log('Socket.IO using Redis adapter');
-      }).catch(err => {
-        console.warn('Redis adapter setup failed:', err.message);
-      });
-    }
-
-    io.on('connection', async (socket) => {
+    io.on('connection', (socket) => {
       let joinedRoomId = null;
 
-      socket.on('room:join', async ({ roomId, name }) => {
+      socket.on('room:join', ({ roomId, name }) => {
         const rid = (roomId && roomId.trim()) || makeRoomId();
-        const room = await getOrCreateRoom(rid);
+        const room = getOrCreateRoom(rid);
 
         socket.join(room.id);
         joinedRoomId = room.id;
@@ -130,16 +83,16 @@ export default function handler(req, res) {
         room.participants.set(socket.id, { id: socket.id, name: name || 'Guest' });
         if (!room.hostId) room.hostId = socket.id;
 
-        await setRoom(room);
+        setRoom(room);
 
         socket.emit('room:welcome', { room: summarizeRoom(room), participants: listParticipants(room) });
         io.to(room.id).emit('room:participants', listParticipants(room));
         io.to(room.id).emit('room:state', summarizeRoom(room));
       });
 
-      socket.on('player:set-source', async (payload) => {
+      socket.on('player:set-source', (payload) => {
         if (!joinedRoomId) return;
-        const room = await getRoom(joinedRoomId);
+        const room = getRoom(joinedRoomId);
         if (!room || room.hostId !== socket.id) return;
         
         if (!payload || !payload.type || !payload.url) return;
@@ -153,53 +106,53 @@ export default function handler(req, res) {
         room.source = { type: payload.type, url: payload.url, videoId: payload.videoId || null };
         room.playback = { status: 'paused', at: 0, rate: 1, ts: Date.now() };
         
-        await setRoom(room);
+        setRoom(room);
         io.to(room.id).emit('player:set-source', { source: room.source, playback: room.playback });
       });
 
-      socket.on('player:play', async ({ at, rate, ts }) => {
+      socket.on('player:play', ({ at, rate, ts }) => {
         if (!joinedRoomId) return;
-        const room = await getRoom(joinedRoomId);
+        const room = getRoom(joinedRoomId);
         if (!room || room.hostId !== socket.id) return;
         
         room.playback = { status: 'playing', at: Number(at) || 0, rate: Number(rate) || 1, ts: Number(ts) || Date.now() };
-        await setRoom(room);
+        setRoom(room);
         io.to(room.id).emit('player:play', { at: room.playback.at, rate: room.playback.rate, ts: room.playback.ts });
       });
 
-      socket.on('player:pause', async ({ at, ts }) => {
+      socket.on('player:pause', ({ at, ts }) => {
         if (!joinedRoomId) return;
-        const room = await getRoom(joinedRoomId);
+        const room = getRoom(joinedRoomId);
         if (!room || room.hostId !== socket.id) return;
         
         room.playback = { ...room.playback, status: 'paused', at: Number(at) || 0, ts: Number(ts) || Date.now() };
-        await setRoom(room);
+        setRoom(room);
         io.to(room.id).emit('player:pause', { at: room.playback.at, ts: room.playback.ts });
       });
 
-      socket.on('player:seek', async ({ to, ts }) => {
+      socket.on('player:seek', ({ to, ts }) => {
         if (!joinedRoomId) return;
-        const room = await getRoom(joinedRoomId);
+        const room = getRoom(joinedRoomId);
         if (!room || room.hostId !== socket.id) return;
         
         room.playback = { ...room.playback, at: Number(to) || 0, ts: Number(ts) || Date.now() };
-        await setRoom(room);
+        setRoom(room);
         io.to(room.id).emit('player:seek', { to: room.playback.at, ts: room.playback.ts });
       });
 
-      socket.on('player:rate', async ({ rate, ts }) => {
+      socket.on('player:rate', ({ rate, ts }) => {
         if (!joinedRoomId) return;
-        const room = await getRoom(joinedRoomId);
+        const room = getRoom(joinedRoomId);
         if (!room || room.hostId !== socket.id) return;
         
         room.playback = { ...room.playback, rate: Number(rate) || 1, ts: Number(ts) || Date.now() };
-        await setRoom(room);
+        setRoom(room);
         io.to(room.id).emit('player:rate', { rate: room.playback.rate, ts: room.playback.ts });
       });
 
-      socket.on('sync:request', async () => {
+      socket.on('sync:request', () => {
         if (!joinedRoomId) return;
-        const room = await getRoom(joinedRoomId);
+        const room = getRoom(joinedRoomId);
         if (!room) return;
         
         const nowPlayback = {
@@ -224,9 +177,9 @@ export default function handler(req, res) {
         });
       });
 
-      socket.on('disconnect', async () => {
+      socket.on('disconnect', () => {
         if (!joinedRoomId) return;
-        const room = await getRoom(joinedRoomId);
+        const room = getRoom(joinedRoomId);
         if (!room) return;
         
         room.participants.delete(socket.id);
@@ -235,7 +188,7 @@ export default function handler(req, res) {
           room.hostId = next && !next.done ? next.value : null;
         }
         
-        await setRoom(room);
+        setRoom(room);
         io.to(room.id).emit('room:participants', listParticipants(room));
         io.to(room.id).emit('room:state', summarizeRoom(room));
       });
