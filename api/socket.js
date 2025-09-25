@@ -66,13 +66,17 @@ export default function handler(req, res) {
     io = new Server(res.socket.server, {
       path: '/api/socket',
       addTrailingSlash: false,
-      cors: { origin: '*' },
-      transports: ['polling', 'websocket']
+      cors: { 
+        origin: '*',
+        methods: ['GET', 'POST'],
+        credentials: false
+      },
+      transports: ['polling'],
+      allowEIO3: true,
+      upgradeTimeout: 30000,
+      pingTimeout: 30000,
+      pingInterval: 25000
     });
-
-    io.on('connection', (socket) => {
-      let joinedRoomId = null;
-
       socket.on('room:join', ({ roomId, name }) => {
         const rid = (roomId && roomId.trim()) || makeRoomId();
         const room = getOrCreateRoom(rid);

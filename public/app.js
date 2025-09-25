@@ -82,102 +82,108 @@ els.tabs.forEach(btn => {
   });
 });
 
-// --- Socket ---
-// Use /api/socket path for Vercel deployment
-const socket = io({ path: '/api/socket' });
-let me = { id: null, name: null, roomId: null, isHost: false };
+// --- HTTP Polling System (Vercel-compatible) ---
+let me = { id: generateUserId(), name: null, roomId: null, isHost: false };
 let current = { source: null, playback: null };
+let pollingInterval = null;
 
-socket.on('connect', () => {
-  me.id = socket.id;
-});
+function generateUserId() {
+  return 'user_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+}
 
-socket.on('room:welcome', ({ room, participants }) => {
-  me.roomId = room.id;
-  els.currentRoom.textContent = room.id;
-  updateHost(room.hostId);
-  updateSource(room.source, room.playback);
+function startPolling() {
+  if (pollingInterval) clearInterval(pollingInterval);
+  if (!me.roomId) return;
+  
+  pollingInterval = setInterval(async () => {
+    try {
+      const response = await fetch(`/api/room/${me.roomId}`);
+      if (response.ok) {
+        const data = await response.json();
+        updateRoomState(data);
+      }
+    } catch (error) {
+      console.warn('Polling error:', error);
+    }
+  }, 2000); // Poll every 2 seconds
+}
+
+function stopPolling() {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
+
+function updateRoomState(data) {
+  const { room, participants, messages } = data;
+  
+  // Update host status
+  me.isHost = room.hostId === me.id;
+  els.hostBadge.hidden = !me.isHost;
+  
+  // Update source and playback if changed
+  if (JSON.stringify(current.source) !== JSON.stringify(room.source)) {
+    updateSource(room.source, room.playback, { applyImmediately: true });
+  } else if (JSON.stringify(current.playback) !== JSON.stringify(room.playback)) {
+    applyPlayback(room.playback);
+  }
+  
+  current.source = room.source;
+  current.playback = room.playback;
+  
+  // Update participants
   updateParticipants(participants);
-  updateInviteLink();
-  log('system', `Joined room ${room.id}`);
-});
-
-socket.on('room:participants', (list) => updateParticipants(list));
-socket.on('room:state', (room) => {
-  updateHost(room.hostId);
-  updateSource(room.source, room.playback);
-});
-
-socket.on('player:set-source', ({ source, playback }) => {
-  updateSource(source, playback, { applyImmediately: true });
-});
-
-socket.on('player:play', ({ at, rate, ts }) => {
-  if (!player) return;
-  suppress(() => {
-    player.setRate(rate || 1);
-    const target = at + (nowMs()-ts)/1000;
-    const cur = player.getTime();
-    if (Math.abs(cur - target) > 0.5) player.seek(target);
-    player.play();
-  });
-});
-
-socket.on('player:pause', ({ at }) => {
-  if (!player) return;
-  suppress(() => {
-    player.pause();
-    player.seek(at);
-  });
-});
-
-socket.on('player:seek', ({ to, ts }) => {
-  if (!player) return;
-  suppress(() => {
-    const target = to + (nowMs()-ts)/1000;
-    player.seek(target);
-  });
-});
-
-socket.on('player:rate', ({ rate }) => {
-  if (!player) return;
-  suppress(() => player.setRate(rate || 1));
-});
-
-socket.on('sync:state', ({ status, at, rate, ts, source, hostId }) => {
-  // Drift correction for non-hosts
-  if (me.isHost || !player) return;
-  if (source) {
-    // If our source mismatches, reload
-    if (!current.source || JSON.stringify(source) !== JSON.stringify(current.source)) {
-      updateSource(source, { status, at, rate, ts }, { applyImmediately: true });
-      return;
-    }
+  
+  // Update messages
+  if (messages) {
+    updateMessages(messages);
   }
-  if (status === 'playing') {
-    const target = at + (nowMs()-ts)/1000;
-    const cur = player.getTime();
-    if (Math.abs(cur - target) > 0.35) {
-      suppress(() => { player.seek(target); player.play(); });
-    } else {
-      player.play();
-    }
-    player.setRate(rate || 1);
-  } else {
-    suppress(() => { player.pause(); player.seek(at); });
-  }
-});
+}
 
-socket.on('chat:message', ({ text, name, at, from }) => {
-  addMsg(name || 'Anon', text, at, from === me.id);
-});
+function updateMessages(messages) {
+  // Simple approach: clear and rebuild (could be optimized)
+  const currentCount = els.chatLog.children.length;
+  if (messages.length !== currentCount) {
+    els.chatLog.innerHTML = '';
+    messages.forEach(msg => {
+      addMsg(msg.name, msg.text, msg.timestamp, msg.userId === me.id);
+    });
+  }
+}
+
+// HTTP-based event handling is now done through polling
+// updateRoomState() handles all state updates
 
 // --- Room Join ---
-els.btnJoin.addEventListener('click', () => {
+els.btnJoin.addEventListener('click', async () => {
   const name = (els.displayName.value || '').trim() || 'Guest';
   const roomId = (els.roomCode.value || '').trim().toUpperCase();
   me.name = name;
-  socket.emit('room:join', { roomId, name });
+  
+  try {
+    const response = await fetch('/api/room/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId, name, userId: me.id })
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      me.roomId = data.room.id;
+      els.currentRoom.textContent = data.room.id;
+      
+      updateRoomState(data);
+      updateInviteLink();
+      log('system', `Joined room ${data.room.id}`);
+      startPolling();
+    } else {
+      const error = await response.json();
+      toast('Failed to join room: ' + error.error);
+    }
+  } catch (error) {
+    toast('Network error: ' + error.message);
+  }
 });
 
 function updateHost(hostId) {
@@ -419,20 +425,38 @@ function toast(text){
 // --- Controls ---
 els.btnSetSource.addEventListener('click', async () => {
   if (!me.isHost) { toast('Only the host can set the source'); return; }
+  if (!me.roomId) { toast('Join a room first'); return; }
+  
   const val = (els.sourceUrl.value || '').trim();
   if (!val) return;
+  
+  let source = null;
+  
   // YouTube?
   const vid = parseYouTubeId(val);
   if (vid) {
-    socket.emit('player:set-source', { type: 'youtube', url: `https://www.youtube.com/watch?v=${vid}`, videoId: vid });
+    source = { type: 'youtube', url: `https://www.youtube.com/watch?v=${vid}`, videoId: vid };
+  }
+  // For Vercel deployment, only allow YouTube
+  else {
+    toast('Only YouTube videos are supported in this deployment.');
     return;
   }
-  // Direct video URL?
-  if (/^https?:\/\/.+\.(mp4|webm|ogg)($|\?)/i.test(val)) {
-    socket.emit('player:set-source', { type: 'video', url: val });
-    return;
+  
+  try {
+    const response = await fetch(`/api/room/${me.roomId}/source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: me.id, source })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      toast('Failed to set source: ' + error.error);
+    }
+  } catch (error) {
+    toast('Network error: ' + error.message);
   }
-  toast('Enter a YouTube link or a direct .mp4/.webm/.ogg URL.');
 });
 
 els.btnUpload.addEventListener('click', () => {
@@ -463,20 +487,46 @@ els.fileInput.addEventListener('change', async () => {
   }
 });
 
-els.btnPlay.addEventListener('click', () => {
-  if (!player) return;
+els.btnPlay.addEventListener('click', async () => {
+  if (!player || !me.roomId) return;
   if (me.isHost) {
-    socket.emit('player:play', { at: player.getTime(), rate: Number(els.rate.value||1), ts: nowMs() });
+    try {
+      await fetch(`/api/room/${me.roomId}/playback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          userId: me.id, 
+          action: 'play', 
+          at: player.getTime(), 
+          rate: Number(els.rate.value||1) 
+        })
+      });
+    } catch (error) {
+      toast('Network error: ' + error.message);
+    }
   } else {
-    toast('Only host can control playback in this starter.');
+    toast('Only host can control playback.');
   }
 });
-els.btnPause.addEventListener('click', () => {
-  if (!player) return;
+
+els.btnPause.addEventListener('click', async () => {
+  if (!player || !me.roomId) return;
   if (me.isHost) {
-    socket.emit('player:pause', { at: player.getTime(), ts: nowMs() });
+    try {
+      await fetch(`/api/room/${me.roomId}/playback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          userId: me.id, 
+          action: 'pause', 
+          at: player.getTime()
+        })
+      });
+    } catch (error) {
+      toast('Network error: ' + error.message);
+    }
   } else {
-    toast('Only host can control playback in this starter.');
+    toast('Only host can control playback.');
   }
 });
 els.seek.addEventListener('input', () => {
@@ -517,10 +567,7 @@ setInterval(() => {
   els.timeLabel.textContent = `${fmtTime(cur)} / ${fmtTime(dur)}`;
 }, 250);
 
-setInterval(() => {
-  if (!player || me.isHost || !me.roomId) return;
-  socket.emit('sync:request');
-}, 15000);
+// Sync is now handled by HTTP polling in startPolling()
 
 // --- Chat ---
 els.btnSend.addEventListener('click', sendChat);
@@ -528,11 +575,30 @@ els.chatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') sendChat();
 });
 
-function sendChat() {
+async function sendChat() {
   const text = (els.chatInput.value || '').trim();
-  if (!text) return;
-  socket.emit('chat:message', { text, name: me.name || 'Guest' });
-  els.chatInput.value = '';
+  if (!text || !me.roomId) return;
+  
+  try {
+    const response = await fetch(`/api/room/${me.roomId}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        userId: me.id, 
+        text, 
+        name: me.name || 'Guest' 
+      })
+    });
+    
+    if (response.ok) {
+      els.chatInput.value = '';
+    } else {
+      const error = await response.json();
+      toast('Failed to send message: ' + error.error);
+    }
+  } catch (error) {
+    toast('Network error: ' + error.message);
+  }
 }
 
 // Try auto-join via URL ?room=
